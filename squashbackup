@@ -3,11 +3,11 @@
 version=1.0
 
 function showhelp {
-  echo "$progname - mksquashfs-based backup helper" >&2
+  echo "squashbackup - mksquashfs-based backup helper" >&2
   echo '' >&2
-  echo "usage: $progname [-o] <outfile> <OPTIONS>" >&2
-  echo "       $progname <OPTIONS>" >&2
-  echo "       $progname -h | -?" >&2
+  echo "usage: squashbackup [-o] <outfile> <OPTIONS>" >&2
+  echo "       squashbackup <OPTIONS>" >&2
+  echo "       squashbackup -h | -?" >&2
   echo '' >&2
   echo 'This script aims to create backups of disks, disk partitions and other block' >&2
   echo 'devices in a compressed squashfs archive, which can be mounted directly without' >&2
@@ -282,11 +282,10 @@ function dohash {
   if [[ $result -ne 0 ]]; then errorexit 3 "error: could not compute $hash hashes"; fi
 }
 
-progname="$0"
-if [[ $# -eq 0 ]]; then errorexit 1 "No arguments given. Use $progname -? for help."; fi
+if [[ $# -eq 0 ]]; then errorexit 1 "No arguments given. Use squashbackup -? for help."; fi
 if [[ $# -eq 1 ]]; then
   if [[ "$1" =~ -[h?] ]]; then showhelp; fi
-  if [[ "$1" = "-V" ]]; then errorexit 1 "$progname - version $version"; fi
+  if [[ "$1" = "-V" ]]; then errorexit 1 "squashbackup - version $version"; fi
 fi
 if [[ `id -u` -ne 0 ]]; then errorexit 1 'This script must be executed as root.'; fi
 workdir=`mktemp -d`
