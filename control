@@ -1,0 +1,8 @@
+Package: squashbackup
+Version: 1.0
+Architecture: amd64
+Maintainer: ax6 <aaaaaa123456789@acidch.at>
+Description: Script that creates squashfs-based backups for block devices.
+ It can be configured to copy a part of a block device, a partition table, or
+ to even zero out the free space in the partition that is being copied.
+Depends: zerofree, squashfs-tools, pv, coreutils, util-linux, bash
