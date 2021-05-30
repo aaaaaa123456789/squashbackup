@@ -1,0 +1,389 @@
+#!/bin/bash
+
+function showhelp {
+  echo "$progname - mksquashfs-based backup helper" >&2
+  echo '' >&2
+  echo "usage: $progname [-o] <outfile> <OPTIONS>" >&2
+  echo "       $progname <OPTIONS>" >&2
+  echo "       $progname -h | -?" >&2
+  echo '' >&2
+  echo 'This script aims to create backups of disks, disk partitions and other block' >&2
+  echo 'devices in a compressed squashfs archive, which can be mounted directly without' >&2
+  echo 'needing to decompress it first. The options control the contents of the archive' >&2
+  echo 'and determine which devices are backed up.' >&2
+  echo 'This script must be executed as root, and devices being backed up must not be' >&2
+  echo 'mounted read/write.' >&2
+  echo '' >&2
+  echo 'Backup contents options:' >&2
+  echo '  -c <dev> [<dev> ...]: copy a block device. An image of this device will be' >&2
+  echo '                        created in the backup archive, named <dev>.bin.' >&2
+  echo '  -z <dev> [<dev> ...]: zero free blocks, then copy a device. The zerofree' >&2
+  echo '                        program will be run on the device before copying.' >&2
+  echo "  -p <dev> [<dev> ...]: dump the device's partition table. All devices listed" >&2
+  echo '                        this way will be dumped using fdisk, and the resulting' >&2
+  echo '                        information will be saved in the archive as part.txt.' >&2
+  echo '  -b <dev> [<dev> ...]: copy the first few bytes of a block device. The size of' >&2
+  echo '                        the copy can be set with the -B option; the default is' >&2
+  echo '                        8M. This image can be used to quickly restore a damaged' >&2
+  echo '                        boot sector and partition table. The file will be named' >&2
+  echo '                        <dev>-<size>.bin.' >&2
+  echo '  -P <dev> [<dev> ...]: shorthand for -p <dev> -b <dev>.' >&2
+  echo '  -s <hash>: computes a hash for all the files in the backup archive at the end' >&2
+  echo '             and adds it to the archive. Valid hashes are md5, sha1, sha224,' >&2
+  echo '             sha256, sha384 and sha512. The hashes will be computed using the' >&2
+  echo '             <hash>sum program and will be saved as <hash>sums.txt.' >&2
+  echo '  -C <comment> [<comment> ...]: adds comments to the archive, one per line. The' >&2
+  echo '                                comments will be saved as comments.txt.' >&2
+  echo 'At least one of -c, -z, -p, -b and -P must be used; otherwise, the backup' >&2
+  echo 'archive would effectively contain no backups. Note that all devices must be' >&2
+  echo 'listed as the device name only; /dev/ will be prepended automatically.' >&2
+  echo '' >&2
+  echo 'Other options:' >&2
+  echo '  -o <outfile>: output file. -o can be omitted if the output file is given at' >&2
+  echo '                the beginning of the command line.' >&2
+  echo '  -B <size>: determines the size used for subsequent -b and -P options; the' >&2
+  echo '             default is 8M. <size> may be a decimal, octal or hexadecimal' >&2
+  echo '             number (prefixed with 0 or 0x as needed); the value is in bytes,' >&2
+  echo '             but the suffixes k, M, G, T may be used to indicate KiB, MiB, GiB' >&2
+  echo '             or TiB respectively instead.' >&2
+  echo '  -q, -Q: respectively enable or disable quiet mode (disabled by default). In' >&2
+  echo '          quiet mode, the script will produce minimal output.' >&2
+  echo '  -a, -w: determine the action to take if the archive already exists: append or' >&2
+  echo '          overwrite. By default, the script will exit with an error if the' >&2
+  echo '          archive already exists.' >&2
+  echo "  -f: doesn't validate devices given to the -c, -z, -p, -b and -P options. If" >&2
+  echo "      option isn't used, the script will check that those devices exist, are" >&2
+  echo "      valid and readable block devices, and aren't mounted read/write." >&2
+  echo '  --: indicates the end of the option list. Subsequent arguments will not be' >&2
+  echo '      treated as options.' >&2
+  echo '  -%: indicates that the following argument is not an option. May be useful to' >&2
+  echo '      escape comments beginning with hyphens. The arguments to -s, -o and -B' >&2
+  echo '      need not (and may not) be escaped.' >&2
+  echo '  -h, -?: show this help and exit.' >&2
+  echo '' >&2
+  echo 'Exit status:' >&2
+  echo '    0   Success' >&2
+  echo '    1   Invalid command (command-line error)' >&2
+  echo '    2   Runtime error (before writing to the archive)' >&2
+  echo '    3   Runtime error (after writing; the archive may be invalid)' >&2
+  echo '' >&2
+  echo 'This script must be executed as root.' >&2
+  exit 1
+}
+
+# working files:
+#   files.txt: mksquashfs pseudo file list
+#   zerofree.txt: list of devices to zerofree
+#   part.txt: list of devices to generate partition information for
+#   partdata.txt: partition data generated for the above
+#   comments.txt: comments generated with -C
+#   exit.txt: exit status
+#   <hash>sums.txt: computed hashes
+#   backup/: base directory
+#   mount/: mount point to compute hashes
+
+function errorexit {
+  # status, error
+  echo "$2" >&2
+  if [[ "$workdir" ]]; then echo $1 >> "$workdir/exit.txt"; fi
+  exit $1
+}
+
+function atexit {
+  if [[ "$workdir" ]]; then rm -rf "$workdir"; fi
+}
+
+function aterror {
+  if [[ -e "$workdir/exit.txt" ]]; then exit `cat "$workdir/exit.txt"`; fi
+}
+
+function checkarg {
+  # option, count
+  if [[ $2 -lt 2 ]]; then errorexit 1 "error: option $1 requires an argument"; fi
+}
+
+function parsearg {
+  case $mode in
+    output)
+      if [[ "$outfile" ]]; then errorexit 1 'error: only one output file allowed'; fi
+      outfile="$1"
+      ;;
+    copy)
+      checkblock "$1"
+      addcopy "$1"
+      inputs=true
+      ;;
+    zerocopy)
+      checkblock "$1"
+      addcopy "$1"
+      echo "/dev/$1" >> $workdir/zerofree.txt
+      inputs=true
+      ;;
+    partitions)
+      checkblock "$1"
+      echo "/dev/$1" >> $workdir/part.txt
+      inputs=true
+      ;;
+    head)
+      checkblock "$1"
+      addhead "$1"
+      inputs=true
+      ;;
+    parthead)
+      checkblock "$1"
+      echo "/dev/$1" >> $workdir/part.txt
+      addhead "$1"
+      inputs=true
+      ;;
+    comment)
+      echo "$1" >> $workdir/comments.txt
+      ;;
+  esac
+}
+
+function validatehash {
+  case $1 in
+    md5) return 0;;
+    sha1) return 0;;
+    sha224) return 0;;
+    sha256) return 0;;
+    sha384) return 0;;
+    sha512) return 0;;
+  esac
+  return 1
+}
+
+function setheadsize {
+  local scale=0
+  local value=0
+  local numcheck='([1-9][0-9]*|0[0-7]*|0[xX][0-9a-fA-F]+)'
+  if [[ "$1" =~ ^${numcheck}$ ]]; then
+    value=$1
+  elif [[ "$1" =~ ^${numcheck}k$ ]]; then
+    value=${1%k}
+    scale=10
+  elif [[ "$1" =~ ^${numcheck}K$ ]]; then
+    value=${1%K}
+    scale=10
+  elif [[ "$1" =~ ^${numcheck}M$ ]]; then
+    value=${1%M}
+    scale=20
+  elif [[ "$1" =~ ^${numcheck}G$ ]]; then
+    value=${1%G}
+    scale=30
+  elif [[ "$1" =~ ^${numcheck}T$ ]]; then
+    value=${1%T}
+    scale=40
+  else
+    return 1
+  fi
+  if [[ $value -lt 0 ]]; then return 1; fi
+  if [[ $((value << scale >> scale)) -ne $value ]]; then return 1; fi
+  ((headsize = value << scale))
+  headsuffix=$1
+  return 0
+}
+
+function checkblock {
+  if [[ "$1" =~ .*/.* ]]; then mkdir -p $workdir/backup/${1%/*}; fi
+  if $skipcheck; then return; fi
+  if [[ ! -b /dev/$1 ]]; then errorexit 2 "error: /dev/$1 is not a block device"; fi
+  if [[ ! -r /dev/$1 ]]; then errorexit 2 "error: /dev/$1 is not readable"; fi
+  mount | while read -r line; do
+    if [[ ! "$line" =~ ^(/dev/$1 on ) ]]; then continue; fi
+    if [[ "$line" =~ \(([^,\)]+,)*rw(,[^,\)]+)*\)$ ]]; then
+      errorexit 2 "error: /dev/$1 is mounted read/write"
+    fi
+  done
+}
+
+function addcopy {
+  local blocksize=`blockdev --getbsz /dev/$1`
+  if [[ $? -ne 0 ]]; then errorexit 2 "error: could not get block size for /dev/$1"; fi
+  if $quiet; then
+    local command="dd if=/dev/$1 bs=$blocksize 2>/dev/null"
+  else
+    local command="echo 'Copying /dev/${1}...' >&2 && dd if=/dev/$1 bs=$blocksize"
+    local devicesize=`blockdev --getsize64 /dev/$1`
+    if [[ $? -eq 0 ]]; then command="$command | pv -W -s $devicesize"; fi
+  fi
+  echo "$1.bin f 444 root root $command" >> $workdir/files.txt
+}
+
+function addhead {
+  local blocksize=`blockdev --getbsz /dev/$1`
+  if [[ $? -ne 0 ]]; then errorexit 2 "error: could not get block size for /dev/$1"; fi
+  if ((headsize % blocksize)); then
+    blocksize=4096
+    while ((headsize % blocksize)); do ((blocksize = blocksize >> 1)); done
+  fi
+  local command="dd if=/dev/$1 bs=$blocksize count=$((headsize / blocksize))"
+  if $quiet; then
+    command="$command 2>/dev/null"
+  else
+    command="echo 'Copying $headsuffix bytes from /dev/${1}...' >&2 && $command | pv -W -s $headsize"
+  fi
+  echo "$1-$headsuffix.bin f 444 root root $command" >> $workdir/files.txt
+}
+
+function genpartdata {
+  cat $workdir/part.txt | while read device; do
+    if [[ -e $workdir/partdata.txt ]]; then
+      echo '' >> $workdir/partdata.txt
+      echo '' >> $workdir/partdata.txt
+    fi
+    fdisk -l "$device" >> $workdir/partdata.txt
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to get partition table for $device"; fi
+  done
+  echo "part.txt f 444 root root cat $workdir/partdata.txt" >> $workdir/files.txt
+}
+
+function dozerofree {
+  cat $workdir/zerofree.txt | while read device; do
+    if $quiet; then
+      zerofree "$device"
+    else
+      echo "Zeroing free blocks in $device..."
+      zerofree -v "$device"
+    fi
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to zero free blocks in $device"; fi
+  done
+}
+
+function checkreplace {
+  if [[ -z "$replace" ]]; then errorexit 2 "error: $outfile already exists (use -a or -w to override)"; fi
+  case $replace in
+    append)
+      if [[ ! -w "$outfile" ]]; then errorexit 2 "error: $outfile already exists (not writable)"; fi
+      unsquashfs -s "$outfile" >/dev/null 2>&1
+      if [[ $? -ne 0 ]]; then errorexit 2 "error: $outfile already exists (not a squashfs archive)"; fi
+      ;;
+    overwrite)
+      rm -f "$outfile"
+      if [[ $? -ne 0 ]]; then errorexit 2 "error: $outfile already exists (failed to delete)"; fi
+      ;;
+  esac
+}
+
+function dohash {
+  mkdir "$workdir/mount"
+  mount "$outfile" "$workdir/mount"
+  if [[ $? -ne 0 ]]; then errorexit 3 "error: could not mount $outfile"; fi
+  pushd "$workdir/mount"
+  if ! $quiet; then echo "Computing $hash hash..."; fi
+  ${hash}sum * > "../${hash}sums.txt"
+  local result=$?
+  popd
+  umount "$workdir/mount"
+  if [[ $? -ne 0 ]]; then errorexit 3 "error: failed to unmount $workdir/mount"; fi
+  if [[ $result -ne 0 ]]; then errorexit 3 "error: could not compute $hash hashes"; fi
+}
+
+progname="$0"
+if [[ $# -eq 0 ]]; then errorexit 1 "No arguments given. Use $progname -? for help."; fi
+if [[ $# -eq 1 ]]; then
+  if [[ "$1" =~ -[h?] ]]; then showhelp; fi
+fi
+if [[ `id -u` -ne 0 ]]; then errorexit 1 'This script must be executed as root.'; fi
+workdir=`mktemp -d`
+if [[ $? -ne 0 ]]; then errorexit 2 'error: could not create temporary directory'; fi
+if [[ ! "$workdir" ]]; then errorexit 2 'error: could not obtain name of temporary directory'; fi
+set -E
+trap atexit EXIT
+trap aterror ERR
+chmod 0755 $workdir
+touch $workdir/files.txt
+mkdir $workdir/backup
+mode=output
+outfile=
+headsize=8388608
+headsuffix=8M
+doublehyphen=false
+hash=
+timestamp=`date +%s`
+replace=
+inputs=false
+quiet=false
+skipcheck=false
+
+while [[ $# -gt 0 ]]; do
+  if $doublehyphen; then
+    parsearg "$1"
+    shift
+  else
+    case "$1" in
+      --) doublehyphen=true; shift;;
+      -o) mode=output; shift;;
+      -c) mode=copy; shift;;
+      -z) mode=zerocopy; shift;;
+      -p) mode=partitions; shift;;
+      -b) mode=head; shift;;
+      -P) mode=parthead; shift;;
+      -C) mode=comment; shift;;
+      -q) quiet=true; shift;;
+      -Q) quiet=false; shift;;
+      -f) skipcheck=true; shift;;
+      -a)
+        if [[ "$replace" ]]; then errorexit 1 'error: -a or -w may only appear once'; fi
+        replace=append
+        shift
+        ;;
+      -w)
+        if [[ "$replace" ]]; then errorexit 1 'error: -a or -w may only appear once'; fi
+        replace=overwrite
+        shift
+        ;;
+      -B)
+        checkarg "$1" $#
+        setheadsize "$2"
+        if [[ $? ]]; then errorexit 1 "error: invalid size: $2"; fi
+        shift 2
+        ;;
+      -s)
+        checkarg "$1" $#
+        if [[ "$hash" ]]; then errorexit 1 "error: hash already set to $hash"; fi
+        if ! validatehash "$2"; then errorexit 1 "error: unknown hash $2"; fi
+        hash="$2"
+        shift 2
+        ;;
+      -%)
+        shift
+        if [[ $# -ne 0 ]]; then
+          parsearg "$1"
+          shift
+        fi
+        ;;
+      -\?) errorexit 1 '-? must be used without other arguments';;
+      -h) errorexit 1 '-h must be used without other arguments';;
+      -*) errorexit 1 "unknown option: $1";;
+      *) parsearg "$1"; shift;;
+    esac
+  fi
+done
+
+if [[ -z "$outfile" ]]; then errorexit 1 'error: no output file specified'; fi
+if ! $inputs; then errorexit 1 'error: no inputs specified'; fi
+
+if [[ -e $workdir/part.txt ]]; then genpartdata; fi
+if [[ -e $workdir/zerofree.txt ]]; then dozerofree; fi
+if [[ -e $workdir/comments.txt ]]; then
+  echo "comments.txt f 444 root root cat $workdir/comments.txt" >> $workdir/files.txt
+fi
+chmod -R 0555 $workdir/backup
+if [[ -e "$outfile" ]]; then checkreplace; fi
+
+if $quiet; then
+  flags=-quiet
+else
+  flags=-info
+fi
+flags="-all-time $timestamp -no-fragments -no-duplicates -no-progress -all-root $flags"
+mksquashfs "$workdir/backup" "$outfile" -pf $workdir/files.txt -root-mode 555 $flags
+if [[ $? -ne 0 ]]; then errorexit 3 "error: failed to create $outfile"; fi
+if [[ "$hash" ]]; then
+  dohash
+  mksquashfs "$workdir/${hash}sums.txt" "$outfile" $flags
+  if [[ $? -ne 0 ]]; then errorexit 3 "error: could not add ${hash}sums.txt to $outfile"; fi
+fi
+
+exit 0
