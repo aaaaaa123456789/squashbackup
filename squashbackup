@@ -1,13 +1,13 @@
 #!/bin/bash
 
-version=1.0
+version=1.0.1
 
 function showhelp {
   echo "squashbackup - mksquashfs-based backup helper" >&2
   echo '' >&2
   echo "usage: squashbackup [-o] <outfile> <OPTIONS>" >&2
   echo "       squashbackup <OPTIONS>" >&2
-  echo "       squashbackup -h | -?" >&2
+  echo "       squashbackup -h | -? | -V" >&2
   echo '' >&2
   echo 'This script aims to create backups of disks, disk partitions and other block' >&2
   echo 'devices in a compressed squashfs archive, which can be mounted directly without' >&2
