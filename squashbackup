@@ -54,8 +54,8 @@ function showhelp {
   echo '          overwrite. By default, the script will exit with an error if the' >&2
   echo '          archive already exists.' >&2
   echo "  -f: doesn't validate devices given to the -c, -z, -p, -b and -P options. If" >&2
-  echo "      option isn't used, the script will check that those devices exist, are" >&2
-  echo "      valid and readable block devices, and aren't mounted read/write." >&2
+  echo "      this option isn't used, the script will check that those devices exist," >&2
+  echo "      are valid and readable block devices, and aren't mounted read/write." >&2
   echo '  --: indicates the end of the option list. Subsequent arguments will not be' >&2
   echo '      treated as options.' >&2
   echo '  -%: indicates that the following argument is not an option. May be useful to' >&2
@@ -254,7 +254,6 @@ function dozerofree {
 }
 
 function checkreplace {
-  if [[ -z "$replace" ]]; then errorexit 2 "error: $outfile already exists (use -a or -w to override)"; fi
   case $replace in
     append)
       if [[ ! -w "$outfile" ]]; then errorexit 2 "error: $outfile already exists (not writable)"; fi
@@ -262,8 +261,9 @@ function checkreplace {
       if [[ $? -ne 0 ]]; then errorexit 2 "error: $outfile already exists (not a squashfs archive)"; fi
       ;;
     overwrite)
-      rm -f "$outfile"
-      if [[ $? -ne 0 ]]; then errorexit 2 "error: $outfile already exists (failed to delete)"; fi
+      ;;
+    *)
+      errorexit 2 "error: $outfile already exists (use -a or -w to override)"
       ;;
   esac
 }
@@ -368,13 +368,17 @@ done
 if [[ -z "$outfile" ]]; then errorexit 1 'error: no output file specified'; fi
 if ! $inputs; then errorexit 1 'error: no inputs specified'; fi
 
+if [[ -e "$outfile" ]]; then checkreplace; fi
 if [[ -e $workdir/part.txt ]]; then genpartdata; fi
 if [[ -e $workdir/zerofree.txt ]]; then dozerofree; fi
 if [[ -e $workdir/comments.txt ]]; then
   echo "comments.txt f 444 root root cat $workdir/comments.txt" >> $workdir/files.txt
 fi
 chmod -R 0555 $workdir/backup
-if [[ -e "$outfile" ]]; then checkreplace; fi
+if [[ ( "$replace" = "overwrite" ) -a ( -e "$outfile" ) ]]; then
+  rm -f "$outfile"
+  if [[ $? -ne 0 ]]; then errorexit 2 "error: $outfile already exists (failed to delete)"; fi
+fi
 
 if $quiet; then
   flags=-quiet
