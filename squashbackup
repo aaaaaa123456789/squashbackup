@@ -3,11 +3,11 @@
 version=1.0.1
 
 function showhelp {
-  echo "squashbackup - mksquashfs-based backup helper" >&2
+  echo 'squashbackup - mksquashfs-based backup helper' >&2
   echo '' >&2
-  echo "usage: squashbackup [-o] <outfile> <OPTIONS>" >&2
-  echo "       squashbackup <OPTIONS>" >&2
-  echo "       squashbackup -h | -? | -V" >&2
+  echo 'usage: squashbackup [-o] <outfile> <OPTIONS>' >&2
+  echo '       squashbackup <OPTIONS>' >&2
+  echo '       squashbackup -h | -? | -V' >&2
   echo '' >&2
   echo 'This script aims to create backups of disks, disk partitions and other block' >&2
   echo 'devices in a compressed squashfs archive, which can be mounted directly without' >&2
@@ -19,8 +19,11 @@ function showhelp {
   echo 'Backup contents options:' >&2
   echo '  -c <dev> [<dev> ...]: copy a block device. An image of this device will be' >&2
   echo '                        created in the backup archive, named <dev>.bin.' >&2
-  echo '  -z <dev> [<dev> ...]: zero free blocks, then copy a device. The zerofree' >&2
-  echo '                        program will be run on the device before copying.' >&2
+  echo '  -z <dev> [<dev> ...]: zero free blocks, then copy a device. On ext2, ext3 and' >&2
+  echo '                        ext4 partitions, the zerofree program will be executed' >&2
+  echo '                        before copying; on other partitions, a file as large as' >&2
+  echo '                        possible and full of zeros will be created and deleted' >&2
+  echo '                        before copying.' >&2
   echo "  -p <dev> [<dev> ...]: dump the device's partition table. All devices listed" >&2
   echo '                        this way will be dumped using fdisk, and the resulting' >&2
   echo '                        information will be saved in the archive as part.txt.' >&2
@@ -88,7 +91,7 @@ function showhelp {
 #   exit.txt: exit status
 #   <hash>sums.txt: computed hashes
 #   backup/: base directory
-#   mount/: mount point to compute hashes
+#   mount/: temporary mount point
 
 function errorexit {
   # status, error
@@ -282,16 +285,46 @@ function genpartdata {
   echo "part.txt f 444 root root cat $workdir/partdata.txt" >> $workdir/files.txt
 }
 
-function dozerofree {
-  cat $workdir/zerofree.txt | while read device; do
+function zero {
+  local fstype=`blkid -s TYPE -o value $1`
+  if [[ ( $? -eq 0 ) && ( $fstype =~ ext[234] ) ]]; then
     if $quiet; then
-      zerofree "$device"
+      zerofree "$1"
     else
-      echo "Zeroing free blocks in $device..."
-      zerofree -v "$device"
+      echo "Zeroing free blocks in $1..."
+      zerofree -v "$1"
     fi
-    if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to zero free blocks in $device"; fi
-  done
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to zero free blocks in $1"; fi
+  else
+    local blocksize=`blockdev --getbsz $1`
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: could not get block size for $1"; fi
+    mkdir -p "$workdir/mount"
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: could not create temporary mount point directory"; fi
+    mount -o rw $1 "$workdir/mount"
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: could not mount $1 for zeroing"; fi
+    local failed=false
+    local tempfiledir="`mktemp -d -p "$workdir/mount" XXXXXXXX.tmp`"
+    if [[ $? -ne 0 ]]; then
+      failed=true
+    else
+      local count=0
+      pushd "$tempfiledir"
+      for (( count = 0; `df --output=avail -B1 $1 | tail -n +2 || echo 0` > (16 * blocksize); count ++ )); do
+        if $quiet; then
+          dd if=/dev/zero of=$count.bin bs=$blocksize 2>/dev/null
+        else
+          echo "Creating zero file ${tempfiledir##*/}/$count.bin in $1..."
+          dd if=/dev/zero bs=$blocksize | pv -W | dd of=$count.bin bs=$blocksize
+        fi
+      done
+      rm *
+      popd
+      rmdir "$tempfiledir"
+    fi
+    umount "$workdir/mount"
+    if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to unmount $workdir/mount"; fi
+    if $failed; then errorexit 2 "error: failed to create zero file in $1"; fi
+  fi
 }
 
 function checkreplace {
@@ -310,7 +343,7 @@ function checkreplace {
 }
 
 function dohash {
-  mkdir "$workdir/mount"
+  mkdir -p "$workdir/mount"
   mount "$outfile" "$workdir/mount"
   if [[ $? -ne 0 ]]; then errorexit 3 "error: could not mount $outfile"; fi
   pushd "$workdir/mount"
@@ -412,7 +445,9 @@ if ! $inputs; then errorexit 1 'error: no inputs specified'; fi
 
 if [[ -e "$outfile" ]]; then checkreplace; fi
 if [[ -e $workdir/part.txt ]]; then genpartdata; fi
-if [[ -e $workdir/zerofree.txt ]]; then dozerofree; fi
+if [[ -e $workdir/zerofree.txt ]]; then
+  cat $workdir/zerofree.txt | while read device; do zero $device; done
+fi
 if [[ -e $workdir/comments.txt ]]; then
   echo "comments.txt f 444 root root cat $workdir/comments.txt" >> $workdir/files.txt
 fi
