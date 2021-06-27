@@ -30,6 +30,11 @@ function showhelp {
   echo '                        boot sector and partition table. The file will be named' >&2
   echo '                        <dev>-<size>.bin.' >&2
   echo '  -P <dev> [<dev> ...]: shorthand for -p <dev> -b <dev>.' >&2
+  echo '  -F [<name>:]<file>: copy a regular file. This is mostly meant for files that' >&2
+  echo '                      are themselves backups and/or partition images. If the' >&2
+  echo '                      <name> part is non-empty, that name will be used within' >&2
+  echo '                      the archive; otherwise (i.e., if the name is empty or' >&2
+  echo '                      missing), the last path component of <file> will be used.' >&2
   echo '  -s <hash>: computes a hash for all the files in the backup archive at the end' >&2
   echo '             and adds it to the archive. Valid hashes are md5, sha1, sha224,' >&2
   echo '             sha256, sha384, sha512 and b2. The hashes will be computed using' >&2
@@ -138,6 +143,11 @@ function parsearg {
       addhead "$1"
       inputs=true
       ;;
+    file)
+      parsefilename "$1"
+      addfile
+      inputs=true
+      ;;
     comment)
       echo "$1" >> $workdir/comments.txt
       ;;
@@ -228,6 +238,36 @@ function addhead {
     command="echo 'Copying $headsuffix bytes from /dev/${1}...' >&2 && $command | pv -W -s $headsize"
   fi
   echo "$1-$headsuffix.bin f 444 root root $command" >> $workdir/files.txt
+}
+
+function parsefilename {
+  if [[ "$1" =~ ([^:].*):(.*) ]]; then
+    filename="${BASH_REMATCH[1]}"
+    refpath="${BASH_REMATCH[2]}"
+  else
+    refpath=${1#:}
+    if [[ "$refpath" =~ .*/([^/]+)/? ]]; then
+      filename="${BASH_REMATCH[1]}"
+    else
+      filename="$refpath"
+    fi
+  fi
+  if [[ "$filename" =~ .*/.* ]]; then mkdir -p $workdir/backup/${filename%/*}; fi
+  blockdevice="`realpath $(df --output=source "$refpath" | tail -n +2)`"
+}
+
+function addfile {
+  local blocksize=`blockdev --getbsz "$blockdevice"`
+  if [[ $? -ne 0 ]]; then blocksize=4096; fi
+  local command="dd if=\"$refpath\" bs=$blocksize"
+  if $quiet; then
+    command="$command 2>/dev/null"
+  else
+    local command="echo 'Copying $refpath into $filename...' >&2 && $command"
+    local filesize=`stat -c %s "$refpath"`
+    if [[ $? -eq 0 ]]; then command="$command | pv -W -s $filesize"; fi
+  fi
+  echo "$filename f 444 root root $command" >> $workdir/files.txt
 }
 
 function genpartdata {
@@ -323,6 +363,7 @@ while [[ $# -gt 0 ]]; do
       -p) mode=partitions; shift;;
       -b) mode=head; shift;;
       -P) mode=parthead; shift;;
+      -F) mode=file; shift;;
       -C) mode=comment; shift;;
       -q) quiet=true; shift;;
       -Q) quiet=false; shift;;
@@ -376,7 +417,7 @@ if [[ -e $workdir/comments.txt ]]; then
   echo "comments.txt f 444 root root cat $workdir/comments.txt" >> $workdir/files.txt
 fi
 chmod -R 0555 $workdir/backup
-if [[ ( "$replace" = "overwrite" ) -a ( -e "$outfile" ) ]]; then
+if [[ ( "$replace" = "overwrite" ) && ( -e "$outfile" ) ]]; then
   rm -f "$outfile"
   if [[ $? -ne 0 ]]; then errorexit 2 "error: $outfile already exists (failed to delete)"; fi
 fi
