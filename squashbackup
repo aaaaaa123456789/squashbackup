@@ -32,8 +32,8 @@ function showhelp {
   echo '  -P <dev> [<dev> ...]: shorthand for -p <dev> -b <dev>.' >&2
   echo '  -s <hash>: computes a hash for all the files in the backup archive at the end' >&2
   echo '             and adds it to the archive. Valid hashes are md5, sha1, sha224,' >&2
-  echo '             sha256, sha384 and sha512. The hashes will be computed using the' >&2
-  echo '             <hash>sum program and will be saved as <hash>sums.txt.' >&2
+  echo '             sha256, sha384, sha512 and b2. The hashes will be computed using' >&2
+  echo '             the <hash>sum program and will be saved as <hash>sums.txt.' >&2
   echo '  -C <comment> [<comment> ...]: adds comments to the archive, one per line. The' >&2
   echo '                                comments will be saved as comments.txt.' >&2
   echo 'At least one of -c, -z, -p, -b and -P must be used; otherwise, the backup' >&2
@@ -152,6 +152,7 @@ function validatehash {
     sha256) return 0;;
     sha384) return 0;;
     sha512) return 0;;
+    b2) return 0;;
   esac
   return 1
 }
