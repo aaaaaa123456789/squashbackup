@@ -255,6 +255,7 @@ function parsefilename {
       filename="$refpath"
     fi
   fi
+  if [[ ! -r "$refpath" ]]; then errorexit 2 "error: $refpath is not readable"; fi
   if [[ "$filename" =~ .*/.* ]]; then mkdir -p $workdir/backup/${filename%/*}; fi
   blockdevice="`realpath $(df --output=source "$refpath" | tail -n +2)`"
 }
@@ -317,6 +318,8 @@ function zero {
           dd if=/dev/zero bs=$blocksize | pv -W | dd of=$count.bin bs=$blocksize
         fi
       done
+      if ! $quiet; then echo "Flushing writes to disk..."; fi
+      sync -f *
       rm *
       popd
       rmdir "$tempfiledir"
