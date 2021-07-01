@@ -44,7 +44,7 @@ function showhelp {
   echo '             the <hash>sum program and will be saved as <hash>sums.txt.' >&2
   echo '  -C <comment> [<comment> ...]: adds comments to the archive, one per line. The' >&2
   echo '                                comments will be saved as comments.txt.' >&2
-  echo 'At least one of -c, -z, -p, -b and -P must be used; otherwise, the backup' >&2
+  echo 'At least one of -c, -z, -p, -b, -P or -F must be used; otherwise, the backup' >&2
   echo 'archive would effectively contain no backups. Note that all devices must be' >&2
   echo 'listed as the device name only; /dev/ will be prepended automatically.' >&2
   echo '' >&2
