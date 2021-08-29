@@ -220,7 +220,7 @@ function addcopy {
   if $quiet; then
     local command="dd if=/dev/$1 bs=$blocksize 2>/dev/null"
   else
-    local command="echo 'Copying /dev/${1}...' >&2 && dd if=/dev/$1 bs=$blocksize"
+    local command="echo \`date +[%T]\` 'Copying /dev/${1}...' >&2 && dd if=/dev/$1 bs=$blocksize"
     local devicesize=`blockdev --getsize64 /dev/$1`
     if [[ $? -eq 0 ]]; then command="$command | pv -W -s $devicesize"; fi
   fi
@@ -238,7 +238,7 @@ function addhead {
   if $quiet; then
     command="$command 2>/dev/null"
   else
-    command="echo 'Copying $headsuffix bytes from /dev/${1}...' >&2 && $command | pv -W -s $headsize"
+    command="echo \`date +[%T]\` 'Copying $headsuffix bytes from /dev/${1}...' >&2 && $command | pv -W -s $headsize"
   fi
   echo "$1-$headsuffix.bin f 444 root root $command" >> $workdir/files.txt
 }
@@ -267,7 +267,7 @@ function addfile {
   if $quiet; then
     command="$command 2>/dev/null"
   else
-    local command="echo 'Copying $refpath into $filename...' >&2 && $command"
+    local command="echo \`date +[%T]\` 'Copying $refpath into $filename...' >&2 && $command"
     local filesize=`stat -c %s "$refpath"`
     if [[ $? -eq 0 ]]; then command="$command | pv -W -s $filesize"; fi
   fi
@@ -292,7 +292,7 @@ function zero {
     if $quiet; then
       zerofree "$1"
     else
-      echo "Zeroing free blocks in $1..."
+      echo "`date +[%T]` Zeroing free blocks in $1..."
       zerofree -v "$1"
     fi
     if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to zero free blocks in $1"; fi
@@ -314,11 +314,11 @@ function zero {
         if $quiet; then
           dd if=/dev/zero of=$count.bin bs=$blocksize 2>/dev/null
         else
-          echo "Creating zero file ${tempfiledir##*/}/$count.bin in $1..."
+          echo "`date +[%T]` Creating zero file ${tempfiledir##*/}/$count.bin in $1..."
           dd if=/dev/zero bs=$blocksize | pv -W | dd of=$count.bin bs=$blocksize
         fi
       done
-      if ! $quiet; then echo "Flushing writes to disk..."; fi
+      if ! $quiet; then echo "`date +[%T]` Flushing writes to disk..."; fi
       sync -f *
       rm *
       popd
@@ -350,7 +350,7 @@ function dohash {
   mount "$outfile" "$workdir/mount"
   if [[ $? -ne 0 ]]; then errorexit 3 "error: could not mount $outfile"; fi
   pushd "$workdir/mount"
-  if ! $quiet; then echo "Computing $hash hash..."; fi
+  if ! $quiet; then echo "`date +[%T]` Computing $hash hashes..."; fi
   ${hash}sum * > "../${hash}sums.txt"
   local result=$?
   popd
@@ -447,6 +447,7 @@ if [[ -z "$outfile" ]]; then errorexit 1 'error: no output file specified'; fi
 if ! $inputs; then errorexit 1 'error: no inputs specified'; fi
 
 if [[ -e "$outfile" ]]; then checkreplace; fi
+if ! $quiet; then echo "`date +[%T]` Starting backup..."; fi
 if [[ -e $workdir/part.txt ]]; then genpartdata; fi
 if [[ -e $workdir/zerofree.txt ]]; then
   cat $workdir/zerofree.txt | while read device; do zero $device; done
@@ -474,4 +475,5 @@ if [[ "$hash" ]]; then
   if [[ $? -ne 0 ]]; then errorexit 3 "error: could not add ${hash}sums.txt to $outfile"; fi
 fi
 
+if ! $quiet; then echo "`date +[%T]` Backup written to $outfile"; fi
 exit 0
