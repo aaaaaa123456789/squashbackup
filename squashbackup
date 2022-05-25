@@ -27,6 +27,8 @@ function showhelp {
   echo "  -p <dev> [<dev> ...]: dump the device's partition table. All devices listed" >&2
   echo '                        this way will be dumped using fdisk, and the resulting' >&2
   echo '                        information will be saved in the archive as part.txt.' >&2
+  echo "                        Also, each device's partition table will be dumped with" >&2
+  echo '                        sfdisk into a file named <dev>.part.' >&2
   echo '  -b <dev> [<dev> ...]: copy the first few bytes of a block device. The size of' >&2
   echo '                        the copy can be set with the -B option; the default is' >&2
   echo '                        8M. This image can be used to quickly restore a damaged' >&2
@@ -282,6 +284,13 @@ function genpartdata {
     fi
     fdisk -l "$device" >> $workdir/partdata.txt
     if [[ $? -ne 0 ]]; then errorexit 2 "error: failed to get partition table for $device"; fi
+    local command="sfdisk -d \"$device\""
+    if $quiet; then
+      command="$command 2>/dev/null"
+    else
+      command="echo \`date +[%T]\` 'Copying partition table from $device into ${device#/dev/}.part...' >&2 && $command"
+    fi
+    echo "${device#/dev/}.part f 444 root root $command" >> $workdir/files.txt
   done
   echo "part.txt f 444 root root cat $workdir/partdata.txt" >> $workdir/files.txt
 }
